@@ -21,10 +21,8 @@ OpenRouter is a multi-backend AI API router built with TypeScript, Bun, and Elys
 
 ### 1. Clone the repo
 
-```bash
 git clone https://github.com/Meghasinha234/openrouter.git
 cd openrouter 
-
 
 ### 2. Setup the database
 bun run prisma generate
