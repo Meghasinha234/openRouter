@@ -9,7 +9,6 @@ import { LlmResponse } from "./llms/Base";
 
 const app = new Elysia()
 .use(bearer())
-.use(openapi());
 .post("/api/v1/chat/completions", async ({ status, bearer: apiKey, body }) => {
   const model = body.model;
   const [_companyName, providerModelName] = model.split("/");
