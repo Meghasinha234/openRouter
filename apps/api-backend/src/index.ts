@@ -7,6 +7,30 @@ import { OpenAi } from "./llms/Openai";
 import { Claude } from "./llms/Claude";
 import { LlmResponse } from "./llms/Base";
 
+async function callProvider(
+  providerName: string,
+  providerModelName: string,
+  messages: typeof Conversation.static.messages
+): Promise<LlmResponse | null> {
+  if (providerName === "Google API") {
+    return Gemini.chat(providerModelName, messages);
+  }
+
+  if (providerName === "Google Vertex") {
+    return Gemini.chat(providerModelName, messages);
+  }
+
+  if (providerName === "OpenAI") {
+    return OpenAi.chat(providerModelName, messages);
+  }
+
+  if (providerName === "Claude API") {
+    return Claude.chat(providerModelName, messages);
+  }
+
+  return null;
+}
+
 const app = new Elysia()
 .use(bearer())
 .post("/api/v1/chat/completions", async ({ status, bearer: apiKey, body }) => {
@@ -56,32 +80,43 @@ const app = new Elysia()
     }
   })
 
-  const provider = providers[Math.floor(Math.random() * providers.length)];
-
   let response: LlmResponse | null = null
-  if (provider.provider.name === "Google API") {
-    response = await Gemini.chat(providerModelName, body.messages)
+  let selectedProvider = null
+
+  for (const provider of providers) {
+    const providerName = provider.provider.name;
+
+    try {
+      console.log(`Trying provider ${providerName} for model ${model}`);
+
+      const providerResponse = await callProvider(
+        providerName,
+        providerModelName,
+        body.messages
+      );
+
+      if (!providerResponse) {
+        console.warn(`Provider ${providerName} is not supported by router`);
+        continue;
+      }
+
+      response = providerResponse;
+      selectedProvider = provider;
+
+      console.log(`Provider ${providerName} succeeded for model ${model}`);
+      break;
+    } catch (error) {
+      console.error(`Provider ${providerName} failed for model ${model}`, error);
+    }
   }
 
-  if (provider.provider.name === "Google Vertex") {
-    response = await Gemini.chat(providerModelName, body.messages)
-  }
-  
-  if (provider.provider.name === "OpenAI") {
-    response = await OpenAi.chat(providerModelName, body.messages)
-  }
-  
-  if (provider.provider.name === "Claude API") {
-    response = await Claude.chat(providerModelName, body.messages)
+  if (!response || !selectedProvider) {
+    return status(502, {
+      message: "All providers failed for this model"
+    })
   }
 
-  if (!response) {
-    return status(403, {
-      message: "No provider found for this model"
-    }) 
-  }
-
-  const creditsUsed = (response.inputTokensConsumed * provider.inputTokenCost + response.outputTokensConsumed * provider.outputTokenCost) / 10;
+  const creditsUsed = (response.inputTokensConsumed * selectedProvider.inputTokenCost + response.outputTokensConsumed * selectedProvider.outputTokenCost) / 10;
   console.log(creditsUsed);
   const res = await prisma.user.update({
     where: {
