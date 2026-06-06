@@ -95,6 +95,37 @@ function getProviderHealthSnapshot() {
   );
 }
 
+type ApiKeyRateLimit = {
+  count: number;
+  resetAt: number;
+};
+
+const apiKeyRateLimits: Record<string, ApiKeyRateLimit> = {};
+
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 5;
+
+function isRateLimited(apiKey: string): boolean {
+  const now = Date.now();
+  const currentLimit = apiKeyRateLimits[apiKey];
+
+  if (!currentLimit || now >= currentLimit.resetAt) {
+    apiKeyRateLimits[apiKey] = {
+      count: 1,
+      resetAt: now + RATE_LIMIT_WINDOW_MS,
+    };
+
+    return false;
+  }
+
+  if (currentLimit.count >= RATE_LIMIT_MAX_REQUESTS) {
+    return true;
+  }
+
+  currentLimit.count += 1;
+  return false;
+}
+
 function getErrorStatus(error: unknown): number | undefined {
   if (typeof error !== "object" || error === null) {
     return undefined;
@@ -210,6 +241,13 @@ const app = new Elysia()
 .post("/api/v1/chat/completions", async ({ status, bearer: apiKey, body }) => {
   const model = body.model;
   const [_companyName, providerModelName] = model.split("/");
+
+  if (!apiKey) {
+    return status(401, {
+      message: "Missing API key"
+    })
+  }
+
   const apiKeyDb = await prisma.apiKey.findFirst({
     where: {
       apiKey,
@@ -224,6 +262,12 @@ const app = new Elysia()
   if (!apiKeyDb) {
     return status(403, {
       message: "Invalid api key"
+    })
+  }
+
+  if (isRateLimited(apiKey)) {
+    return status(429, {
+      message: "Rate limit exceeded"
     })
   }
 
