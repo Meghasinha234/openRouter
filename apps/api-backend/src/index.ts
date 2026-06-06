@@ -110,18 +110,28 @@ async function callProviderWithRetry(
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const attemptStartedAt = Date.now();
+
     try {
       console.log(`Provider ${providerName} attempt ${attempt}/${maxAttempts}`);
 
-      return await callProvider(providerName, providerModelName, messages);
+      const response = await callProvider(providerName, providerModelName, messages);
+      const latencyMs = Date.now() - attemptStartedAt;
+
+      console.log(
+        `Provider ${providerName} attempt ${attempt} succeeded in ${latencyMs}ms`
+      );
+
+      return response;
     } catch (error) {
       lastError = error;
 
+      const latencyMs = Date.now() - attemptStartedAt;
       const errorType = classifyProviderError(error);
       const shouldRetry = isRetryableProviderError(errorType) && attempt < maxAttempts;
 
       console.error(
-        `Provider ${providerName} attempt ${attempt} failed with ${errorType}`
+        `Provider ${providerName} attempt ${attempt} failed with ${errorType} in ${latencyMs}ms`
       );
 
       if (!shouldRetry) {
