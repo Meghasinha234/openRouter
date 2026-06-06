@@ -31,6 +31,110 @@ async function callProvider(
   return null;
 }
 
+type ProviderErrorType =
+  | "AUTH_ERROR"
+  | "RATE_LIMITED"
+  | "TIMEOUT"
+  | "PROVIDER_5XX"
+  | "BAD_REQUEST"
+  | "UNKNOWN";
+
+function getErrorStatus(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) {
+    return undefined;
+  }
+
+  const maybeError = error as {
+    status?: number;
+    code?: number;
+    response?: {
+      status?: number;
+    };
+  };
+
+  return maybeError.status ?? maybeError.response?.status ?? maybeError.code;
+}
+
+function classifyProviderError(error: unknown): ProviderErrorType {
+  const status = getErrorStatus(error);
+
+  if (status === 401 || status === 403) {
+    return "AUTH_ERROR";
+  }
+
+  if (status === 429) {
+    return "RATE_LIMITED";
+  }
+
+  if (status === 400 || status === 404) {
+    return "BAD_REQUEST";
+  }
+
+  if (status && status >= 500 && status <= 599) {
+    return "PROVIDER_5XX";
+  }
+
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+
+  if (
+    message.includes("timeout") ||
+    message.includes("timed out") ||
+    message.includes("econnreset") ||
+    message.includes("network")
+  ) {
+    return "TIMEOUT";
+  }
+
+  return "UNKNOWN";
+}
+
+function isRetryableProviderError(errorType: ProviderErrorType): boolean {
+  return (
+    errorType === "RATE_LIMITED" ||
+    errorType === "TIMEOUT" ||
+    errorType === "PROVIDER_5XX" ||
+    errorType === "UNKNOWN"
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function callProviderWithRetry(
+  providerName: string,
+  providerModelName: string,
+  messages: typeof Conversation.static.messages,
+  maxAttempts = 2
+): Promise<LlmResponse | null> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      console.log(`Provider ${providerName} attempt ${attempt}/${maxAttempts}`);
+
+      return await callProvider(providerName, providerModelName, messages);
+    } catch (error) {
+      lastError = error;
+
+      const errorType = classifyProviderError(error);
+      const shouldRetry = isRetryableProviderError(errorType) && attempt < maxAttempts;
+
+      console.error(
+        `Provider ${providerName} attempt ${attempt} failed with ${errorType}`
+      );
+
+      if (!shouldRetry) {
+        throw error;
+      }
+
+      await sleep(500 * attempt);
+    }
+  }
+
+  throw lastError;
+}
+
 const app = new Elysia()
 .use(bearer())
 .post("/api/v1/chat/completions", async ({ status, bearer: apiKey, body }) => {
@@ -89,7 +193,7 @@ const app = new Elysia()
     try {
       console.log(`Trying provider ${providerName} for model ${model}`);
 
-      const providerResponse = await callProvider(
+      const providerResponse = await callProviderWithRetry(
         providerName,
         providerModelName,
         body.messages
