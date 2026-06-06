@@ -39,6 +39,62 @@ type ProviderErrorType =
   | "BAD_REQUEST"
   | "UNKNOWN";
 
+type ProviderStats = {
+  requests: number;
+  successes: number;
+  failures: number;
+  totalLatencyMs: number;
+};
+
+const providerStats: Record<string, ProviderStats> = {};
+
+function getProviderStats(providerName: string): ProviderStats {
+  if (!providerStats[providerName]) {
+    providerStats[providerName] = {
+      requests: 0,
+      successes: 0,
+      failures: 0,
+      totalLatencyMs: 0,
+    };
+  }
+
+  return providerStats[providerName];
+}
+
+function recordProviderAttempt(
+  providerName: string,
+  latencyMs: number,
+  succeeded: boolean
+) {
+  const stats = getProviderStats(providerName);
+
+  stats.requests += 1;
+  stats.totalLatencyMs += latencyMs;
+
+  if (succeeded) {
+    stats.successes += 1;
+  } else {
+    stats.failures += 1;
+  }
+}
+
+function getProviderHealthSnapshot() {
+  return Object.fromEntries(
+    Object.entries(providerStats).map(([providerName, stats]) => [
+      providerName,
+      {
+        requests: stats.requests,
+        successes: stats.successes,
+        failures: stats.failures,
+        avgLatencyMs:
+          stats.requests === 0
+            ? 0
+            : Math.round(stats.totalLatencyMs / stats.requests),
+      },
+    ])
+  );
+}
+
 function getErrorStatus(error: unknown): number | undefined {
   if (typeof error !== "object" || error === null) {
     return undefined;
@@ -118,6 +174,8 @@ async function callProviderWithRetry(
       const response = await callProvider(providerName, providerModelName, messages);
       const latencyMs = Date.now() - attemptStartedAt;
 
+      recordProviderAttempt(providerName, latencyMs, true);
+
       console.log(
         `Provider ${providerName} attempt ${attempt} succeeded in ${latencyMs}ms`
       );
@@ -129,6 +187,8 @@ async function callProviderWithRetry(
       const latencyMs = Date.now() - attemptStartedAt;
       const errorType = classifyProviderError(error);
       const shouldRetry = isRetryableProviderError(errorType) && attempt < maxAttempts;
+
+      recordProviderAttempt(providerName, latencyMs, false);
 
       console.error(
         `Provider ${providerName} attempt ${attempt} failed with ${errorType} in ${latencyMs}ms`
@@ -258,7 +318,11 @@ const app = new Elysia()
   return response;
 }, {
   body: Conversation
-}).listen(4000);
+})
+.get("/api/v1/provider-health", () => {
+  return getProviderHealthSnapshot();
+})
+.listen(4000);
 
 console.log(
   `🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`
